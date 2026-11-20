@@ -1,6 +1,6 @@
 import {useState,type FormEvent} from 'react';
 import {csv,fmt,timeText,ticker,useSaved,type Mode,type Quote} from './data';
-import {emptyPlan,fillError,summarize,tradePlanStorage,type Fill,type Side,type Stage,type TradePlan} from './trade-ledger';
+import {emptyPlan,estimateBoardLots,fillError,summarize,tradePlanStorage,type Fill,type Side,type Stage,type TradePlan} from './trade-ledger';
 import {DailyTradeReview} from './trade-review';
 
 const label={buy:'买入',sell:'卖出'};
@@ -42,11 +42,14 @@ function PlanDetail({code,mode,quote,plan,edit,draftPrice}:{
   const [form,setForm]=useState({...initial,price:draftPrice==null?'':String(draftPrice)});
   const [feedback,setFeedback]=useState('');
   const [budget,setBudget]=useState(plan.budget?String(plan.budget):'');
+  const [allocation,setAllocation]=useState('');
   const position=summarize(plan.fills);
   const planned=plan.stages.reduce((total,row)=>total+(row.side==='buy'?row.price*row.quantity:0),0);
   const cashLeft=plan.budget?plan.budget-position.basis-planned:null;
   const price=quote?.is_stale?undefined:quote?.price;
   const input=(key:keyof typeof form,value:string)=>setForm(prev=>({...prev,[key]:value}));
+  const useLotEstimate=side==='buy'&&/^(sh60|sz00)\d{4}$/.test(code);
+  const estimate=useLotEstimate?estimateBoardLots(budget,form.price,allocation):null;
   function submit(event:FormEvent<HTMLFormElement>){
     event.preventDefault();
     const entry={side,price:Number(form.price),quantity:Number(form.quantity)};
@@ -104,6 +107,15 @@ function PlanDetail({code,mode,quote,plan,edit,draftPrice}:{
         <label>备注<input value={form.note} maxLength={100} onChange={e=>input('note',e.target.value)} placeholder="例如缩量回踩"/></label>}
       <button className="btn">{tab==='plan'?'添加计划档':'登记成交'}</button>
     </form>
+    {useLotEstimate&&<div className="research-bar plan-controls">
+      <label>预算占比（%）<input type="number" min=".01" max="100" step=".01" value={allocation}
+        onChange={e=>setAllocation(e.target.value)}/></label>
+      <span className="micro">{estimate
+        ? `估算 ${fmt(estimate.shares,0)} 股（${fmt(estimate.lots,0)} 手），金额 ¥${fmt(estimate.gross)}，未含费用。`
+        : '输入预算、价格及占比，按每手 100 股向下取整。'}</span>
+      <button type="button" className="btn" disabled={!estimate?.shares}
+        onClick={()=>{if(estimate?.shares)input('quantity',String(estimate.shares))}}>填入股数</button>
+    </div>}
     {feedback&&<div className="research-foot screen-feedback" role="status">{feedback}</div>}
     <div className="table-wrap"><table className="research-table"><thead><tr><th>序号</th><th>方向</th><th>价格</th><th>股数</th><th>金额（元）</th>
       {tab==='plan'?<><th>条件</th><th>备注</th></>:<><th>费用</th><th>成交日</th></>}<th>操作</th></tr></thead>

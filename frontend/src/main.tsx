@@ -2,6 +2,7 @@ import {lazy,Suspense,useCallback,useEffect,useRef,useState,type ReactNode,type 
 import {createRoot} from 'react-dom/client';
 import {Screener,Tracking} from './research';
 import {BuyCandidates} from './buy-candidates';
+import {WeightedSectorTreemap} from './weighted-sector-treemap';
 import {newTrack,TRACK_LIMIT,type Tracked} from './tracking';
 import {externalUrl,csv,fmt,money,percent,signed,ticker,timeText,tone,latestPacket,useFeed,useSaved,useStream,
   type Alert,type Bars,type Clock,type Flow,type Mode,type Mood,type News,type Packet,type Quote,type Ranking,type RoleData,type Score,type Sector,type Tail} from './data';
@@ -370,7 +371,7 @@ function App(){
           {show('sectors')&&<Panel id="sectors" className="sector-panel" kicker="CAPITAL ROTATION" title={<>板块资金 <small>TOP 20</small></>} actions={<Tabs label="板块视图" value={sectorView} onChange={setSectorView} items={[[ 'table','榜单'],['heat','热力图']]}/>}>
             <div className="sector-controls"><Tabs label="板块类别" items={kinds} value={kind} onChange={v=>{setKind(v);setBoard(null)}}/><Tabs label="资金周期" items={spans} value={span} onChange={v=>{setSpan(v);setBoard(null)}}/>
               <Tabs label="资金方向" items={[[ 'inflow','净流入'],['outflow','净流出']]} value={order} onChange={v=>{setOrder(v);setBoard(null)}}/></div>
-            {rows.length?(sectorView==='heat'?<div className="heatmap">{rows.map(s=><button key={s.code} style={{background:s.main_net>0?'#b74252':'#187768',opacity:.46+Math.min(.54,Math.abs(s.main_net)/(Math.max(...rows.map(x=>Math.abs(x.main_net)))||1)*.54)}} className={board===s.code?'picked':''} onClick={()=>chooseSector(s.code)}><strong>{s.name}</strong><small>{percent(s.pct)}</small><b>{money(s.main_net,true)}</b></button>)}</div>:
+            {rows.length?(sectorView==='heat'?<WeightedSectorTreemap sectors={rows} selected={board} onSelect={chooseSector}/>:
               <div className="table-wrap sector-table"><table><thead><tr><th>排名 / 板块</th><th>涨跌幅</th><th>主力净额</th><th>成交额</th><th>领涨股</th><th>热度</th></tr></thead><tbody>{rows.map(s=><tr key={s.code} className={board===s.code?'picked':''}>
                 <td><button className="plain row-link" onClick={()=>chooseSector(s.code)}><span className="rank">{String(s.rank).padStart(2,'0')}</span>{s.name}<small className={tone(s.rank_delta)}>{s.rank_delta?signed(s.rank_delta,0):''}</small></button></td>
                 <td className={tone(s.pct)}>{percent(s.pct)}</td><td className={tone(s.main_net)}>{money(s.main_net,true)}</td><td>{money(s.amount)}</td><td>{s.leader||'—'}</td><td>{fmt(s.heat.score,0)}</td></tr>)}</tbody></table></div>):

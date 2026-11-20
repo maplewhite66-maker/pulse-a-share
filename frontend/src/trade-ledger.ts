@@ -6,6 +6,22 @@ export type TradePlan={budget:number;stages:Stage[];fills:Fill[]};
 export const emptyPlan:TradePlan={budget:0,stages:[],fills:[]};
 export const tradePlanStorage='trade-plans-v1';
 
+export function estimateBoardLots(capital: string, price: string, percent: string) {
+  // Parse the form's two-decimal inputs directly, keeping the budget calculation exact.
+  const hundredths = (text: string) => {
+    const match = /^(\d{0,12})(?:\.(\d{1,2}))?$/.exec(text.trim());
+    if (!match || (!match[1] && !match[2])) return null;
+    return BigInt(match[1] || '0') * 100n + BigInt((match[2] || '').padEnd(2, '0'));
+  };
+  const capitalCents = hundredths(capital);
+  const priceCents = hundredths(price);
+  const basisPoints = hundredths(percent);
+  if (!capitalCents || !priceCents || !basisPoints || basisPoints > 10_000n) return null;
+  const perLot = priceCents * 100n;
+  const lots = capitalCents * basisPoints / (10_000n * perLot);
+  return {lots: Number(lots), shares: Number(lots * 100n), gross: Number(lots * perLot) / 100};
+}
+
 export function summarize(fills:Fill[]){
   let shares=0,basis=0,realized=0,fees=0;
   for(const fill of fills){
