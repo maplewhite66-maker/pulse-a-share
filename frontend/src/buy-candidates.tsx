@@ -3,6 +3,7 @@ import {externalUrl,fmt,money,percent,timeText,tone,useFeed,type Clock,type Mode
 import {AuctionWatch} from './live-strategy';
 import {ResearchSource} from './research';
 import type {Tracked} from './tracking';
+import {DailyLhbPoster} from './components/DailyLhbPoster';
 
 type Session='open'|'tail';
 type Tab=Session|'archive';
@@ -24,11 +25,11 @@ const messages:Record<string,string>={
   ready:'候选已按规则分排序。',history:'当日历史记录，适用窗口已结束或行情待确认。'
 };
 
-export function BuyCandidates({mode,clock,visible,revision,watch,tracked,openChart,addWatch,addTrack}:{
+export function BuyCandidates({mode,clock,visible,revision,watch,tracked,openChart,addWatch,addTrack,startInArchive=false}:{
   mode:Mode;clock:Clock|null|undefined;visible:boolean;revision:number;watch:string[];tracked:Tracked[];
-  openChart:(c:string)=>void;addWatch:(c:string)=>string|null;addTrack:(c:string)=>string|null;
+  openChart:(c:string)=>void;addWatch:(c:string)=>string|null;addTrack:(c:string)=>string|null;startInArchive?:boolean;
 }){
-  const [tab,setTab]=useState<Tab>('open'),[feedback,setFeedback]=useState(''),[archiveDay,setArchiveDay]=useState('');
+  const [tab,setTab]=useState<Tab>(startInArchive?'archive':'open'),[feedback,setFeedback]=useState(''),[archiveDay,setArchiveDay]=useState('');
   const hm=clock?.time.slice(11,16)??'';
   const activeOpen=mode==='live'&&clock?.phase==='morning'&&hm>='09:30'&&hm<'10:00';
   const activeTail=mode==='live'&&clock?.phase==='afternoon'&&hm>='14:45'&&hm<'14:57';
@@ -42,9 +43,9 @@ export function BuyCandidates({mode,clock,visible,revision,watch,tracked,openCha
   const outside=mode==='live'&&(tab==='open'?!activeOpen:!activeTail);
   const historical=Boolean(data?.items.length&&(outside||packet?.is_stale||data.status==='history'));
   useEffect(()=>{setFeedback('')},[mode,tab]);
-  return <section id="ideas" className="panel research" hidden={!visible}>
-    <header className="research-head"><div><div className="kicker">04 / SESSION CANDIDATES</div><h2>竞价观察与开收盘候选</h2>
-      <p>开盘找承接，尾盘找量价同步，收盘后复核次日观察名单。</p></div>
+  return <section id={startInArchive?'close-review':'ideas'} className="panel research" hidden={!visible}>
+    <header className="research-head"><div><div className="kicker">04 / SESSION CANDIDATES</div><h2>{tab==='archive'?'收盘复盘分析':'竞价观察与开收盘候选'}</h2>
+      <p>{tab==='archive'?'核对当日公开席位和次日观察名单。':'开盘找承接，尾盘找量价同步，收盘后复核次日观察名单。'}</p></div>
       <span className="badge">{mode==='demo'?'离线演示':clock?.label??'等待时段确认'}</span></header>
     <AuctionWatch visible={visible&&mode==='live'&&tab==='open'} revision={revision}/>
     <div className="research-bar ideas-controls">
@@ -53,6 +54,7 @@ export function BuyCandidates({mode,clock,visible,revision,watch,tracked,openCha
       <span>{tab==='archive'?'交易日 15:05 后复核':desc.time+' 北京时间 · '+desc.pool}</span>
     </div>
     {tab==='archive'?<div className="session-archive">
+      {visible&&<DailyLhbPoster mode={mode} revision={revision} openChart={openChart}/>}
       <div className="ideas-rule">收盘复核只检查当日尾盘榜。收盘价须在尾盘失效线与参考上限之间，次日还需重新验证开盘承接。</div>
       {mode==='demo'?<div className="empty">档案使用真实行情。切换至真实模式查看。</div>:day?<>
         <div className="archive-toolbar"><label>交易日 <select value={day.day} onChange={e=>setArchiveDay(e.target.value)}>{days.map(d=><option key={d.day}>{d.day}</option>)}</select></label>

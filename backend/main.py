@@ -38,6 +38,7 @@ from backend.services.sector_live_flow import SectorLiveFlow
 from backend.services.capital_profiler import CapitalProfiler
 from backend.services.hot_money_simulator import HotMoneySimulator
 from backend.services.pulse_v4_strategy import PulseV4Strategy
+from backend.services.daily_lhb import DailyLhb, render_svg
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
@@ -502,9 +503,10 @@ def create_app(*, database=None, transport=None, access=None, ground_volume_root
             app.state.capital_profiler = CapitalProfiler(app.state.market, inputs)
             app.state.hot_money = HotMoneySimulator(inputs)
             app.state.pulse_v4 = PulseV4Strategy(app.state.sector_live, app.state.hot_money, app.state.ground_volume)
+            app.state.daily_lhb = DailyLhb(app.state.market, enabled=os.getenv("PULSE_LHB_SCHEDULER", os.getenv("PULSE_SCHEDULER", "0")) == "1")
             background = [asyncio.create_task(worker.loop()) for worker in (
                 app.state.market.hourly, app.state.market.sessions, app.state.premarket, app.state.monitor,
-                app.state.ground_volume, app.state.sector_live,
+                app.state.ground_volume, app.state.sector_live, app.state.daily_lhb,
                 *((app.state.market.paper,) if paper_enabled else ()))]
             try:
                 yield
@@ -574,6 +576,29 @@ def create_app(*, database=None, transport=None, access=None, ground_volume_root
     async def latest_report(req: Request):
         report = req.app.state.premarket.get()
         return svc(req).local("live", report, "Pulse 盘前报告", None if report else "盘前报告尚未生成，请查看调度状态")
+
+    @api.get("/api/reports/daily-lhb")
+    async def daily_lhb(req: Request, day: date | None = None, mode: Mode = "live"):
+        reporter = req.app.state.daily_lhb
+        today = now().date().isoformat()
+        selected = day.isoformat() if day else None
+        report = reporter.get(selected) if mode == "live" else None
+        note = reporter.note if reporter.note_day == today and selected in (None, today) else None
+        data = {"report": report, "days": reporter.list_days() if mode == "live" else [],
+                "day": today, "enabled": reporter.enabled,
+                "running": mode == "live" and reporter.running and selected in (None, today),
+                "message": note if mode == "live" else "请在真实模式查看交易公开信息"}
+        return svc(req).local(mode, data, "Pulse 收盘龙虎榜")
+
+    @api.get("/api/reports/daily-lhb/{day}.svg")
+    async def daily_lhb_svg(req: Request, day: date):
+        report = req.app.state.daily_lhb.get(day.isoformat())
+        if not report:
+            raise HTTPException(404, "该交易日还没有可核对的龙虎榜海报")
+        return Response(render_svg(report), media_type="image/svg+xml",
+                        headers={"ETag": '"' + report["revision"] + '"',
+                                 "Content-Security-Policy": "default-src 'none'; sandbox",
+                                 "X-Content-Type-Options": "nosniff"})
 
     @api.get("/api/reports/{day}.md")
     async def dated_markdown(req: Request, day: date, revision: int | None = Query(None, ge=1, le=100)):

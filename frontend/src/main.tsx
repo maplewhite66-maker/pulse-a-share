@@ -33,7 +33,7 @@ type Settings={hidden:PanelKey[];width:'standard'|'wide';sectorFirst:boolean;new
 const defaultLayout:Settings={hidden:[],width:'standard',sectorFirst:false,newsFirst:false};
 const defaultThresholds={pct:3,turnover:5,rapid:1,volume:2.5};
 const researchPages=['tracking','screen','ideas','tomorrow','plan','hourly','ground-volume','paper','global','premarket','monitor',
-  'sector-live','capital-profile','hot-money','pulse-v4'] as const;
+  'sector-live','capital-profile','hot-money','pulse-v4','close-review'] as const;
 type ResearchPage=typeof researchPages[number];
 function researchPage(id:string){return researchPages.find(page=>page===id.split('?',1)[0])??null}
 
@@ -299,7 +299,7 @@ function App(){
     <aside className="rail"><button className="logo" aria-label="回到总览" onClick={()=>navigate('top')}><Glyph name="pulse" size={27}/></button>
       <nav>{[['top','grid','总览'],['premarket','globe','盘前报告'],['watch','star','自选'],['sectors','layers','板块'],
         ['sector-live','layers','资金动态'],['capital-profile','target','资金画像'],['hot-money','pulse','风格回测'],['pulse-v4','filter','四维融合'],
-        ['alerts','bell','预警'],['monitor','clock','全天策略'],['tracking','target','追踪'],['plan','layers','交易复盘'],['screen','filter','选股'],['ground-volume','filter','地量严选'],['hourly','clock','超短线'],['paper','pulse','模拟交易'],['ideas','pulse','开收盘'],['global','globe','全球行情'],['tomorrow','star','明日关注'],['price','pulse','走势'],['tail','clock','尾盘']].filter(([id])=>canDemo||id!=='paper').map(([id,icon,text])=><button key={id} className={id===activeNav?'active':''} onClick={()=>navigate(id)}><Glyph name={icon} size={18}/><small>{text}</small></button>)}</nav>
+        ['alerts','bell','预警'],['monitor','clock','全天策略'],['tracking','target','追踪'],['plan','layers','交易复盘'],['screen','filter','选股'],['ground-volume','filter','地量严选'],['hourly','clock','超短线'],['paper','pulse','模拟交易'],['ideas','pulse','开收盘'],['close-review','clock','收盘复盘'],['global','globe','全球行情'],['tomorrow','star','明日关注'],['price','pulse','走势'],['tail','clock','尾盘']].filter(([id])=>canDemo||id!=='paper').map(([id,icon,text])=><button key={id} className={id===activeNav?'active':''} onClick={()=>navigate(id)}><Glyph name={icon} size={18}/><small>{text}</small></button>)}</nav>
       <span className="rail-version">PULSE 4.0</span></aside>
     <main className="workspace">
       <header className="top"><div className="brand"><div className="kicker"><span className="tag-line"/> PULSE <span className="sep">/</span> MARKET TERMINAL</div><h1>A 股智能盯盘台</h1></div>
@@ -323,7 +323,8 @@ function App(){
           visible={research==='tracking'} add={addTrack} openChart={openChart} focus={trackFocus}/>
         <Screener mode={mode} watch={watch} tracked={tracked} board={screenBoard} visible={research==='screen'}
           revision={revision} openChart={openChart} addWatch={addWatch} addTrack={addTrack}/>
-        <BuyCandidates mode={mode} clock={clock} visible={research==='ideas'} revision={revision}
+        <BuyCandidates key={research==='close-review'?'close-review':'ideas'} startInArchive={research==='close-review'}
+          mode={mode} clock={clock} visible={research==='ideas'||research==='close-review'} revision={revision}
           watch={watch} tracked={tracked} openChart={openChart} addWatch={addWatch} addTrack={addTrack}/>
         <Suspense fallback={<div className="panel"><Empty text="正在加载工作台…"/></div>}>
         {research==='monitor'&&<LiveStrategy revision={revision} openChart={openChart}

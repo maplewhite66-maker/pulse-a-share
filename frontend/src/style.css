@@ -275,6 +275,11 @@ footer summary {cursor:pointer}
 .v4-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;padding:14px 20px}
 .v4-grid article {background:#132231;border:1px solid #31465a;border-radius:5px;padding:10px}
 .v4-grid p {font-size:11px;color:var(--muted);margin-bottom:0}
+.lhb-review {margin:0 0 14px;border:1px solid #31465a;border-radius:7px;overflow:hidden}
+.lhb-review h3 {margin:0 0 5px;font-size:18px}
+.lhb-review header p {margin:0}
+.lhb-poster {margin:12px auto;max-width:min(940px,calc(100% - 18px));padding:6px;background:#15212e;border-radius:8px}
+.lhb-poster img {display:block;width:100%;height:auto;border-radius:4px}
 .tracking-grid {display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);align-items:start;border-top:1px solid #253343}
 .track-detail {min-width:0;padding:12px 17px;border-left:1px solid #253343;background:#101a26}
 .track-title {display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
