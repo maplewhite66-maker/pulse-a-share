@@ -2,8 +2,8 @@ import {ticker,type Mode} from './data';
 import {newTrack,TRACK_LIMIT,type Tracked} from './tracking';
 
 export const WATCH_LIMIT=60;
-// The quote API allows 85 codes, leaving one position for the open chart.
-export const POOLED_QUOTE_LIMIT=84;
+// Keep all saved symbols subscribed, plus one additional symbol for the open chart.
+export const POOLED_QUOTE_LIMIT=WATCH_LIMIT+TRACK_LIMIT;
 type Candidate={code:string;name:string;board:string;role:string;boardNet?:number};
 const roles=new Set(['龙头','中军','低位','补涨']);
 

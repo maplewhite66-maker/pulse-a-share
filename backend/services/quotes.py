@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from backend.adapters.live import Unavailable
 from backend.services.clock import now
 
+# Sixty watchlist symbols, one hundred tracked stocks and the open chart.
+QUOTE_SYMBOL_LIMIT = 161
+# A fully qualified ticker such as 600519.SH has nine characters plus a separator.
+QUOTE_LIST_LIMIT = QUOTE_SYMBOL_LIMIT * 10
+
 
 @dataclass
 class Sample:

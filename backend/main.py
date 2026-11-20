@@ -26,7 +26,7 @@ from backend.services.analytics import clip, indicators, market_mood, quote_sign
 from backend.services.cache import Cache
 from backend.services.clock import ACTIVE, now, phase
 from backend.services.screener import ScreenRequest, market_breadth, screen
-from backend.services.quotes import QuoteBatcher, quote_interval
+from backend.services.quotes import QUOTE_LIST_LIMIT, QUOTE_SYMBOL_LIMIT, QuoteBatcher, quote_interval
 from backend.services.ideas import SessionJournal, WINDOWS, fresh, prior_tail, rank_candidate, shortlist, window_open
 from backend.services.hourly import HourlyScanner
 from backend.services.paper import PaperAccount
@@ -455,8 +455,8 @@ class Market:
         return self.local(mode,[r for _,r in self.cache.history(alerts_key,100)],"Pulse 预警规则")
 
 
-def codes_from(value, limit=60):
-    if len(value) > 900:
+def codes_from(value, limit=60, max_length=900):
+    if len(value) > max_length:
         raise ValueError("股票代码列表过长")
     values = [x for x in value.split(",") if x.strip()]
     if len(values)>limit:
@@ -471,9 +471,9 @@ def checked(code):
         raise HTTPException(422,str(exc)) from exc
 
 
-def parse_codes(value, limit=60):
+def parse_codes(value, limit=60, max_length=900):
     try:
-        return codes_from(value, limit)
+        return codes_from(value, limit, max_length)
     except ValueError as exc:
         raise HTTPException(422,str(exc)) from exc
 
@@ -616,9 +616,9 @@ def create_app(*, database=None, transport=None, access=None, ground_volume_root
         return await svc(req).quotes(mode,tuple(live.INDICES),refresh=refresh)
 
     @api.get("/api/stocks/quotes")
-    async def quotes(req:Request, mode:Mode="live", codes:str=Query(default=",".join(DEFAULT_CODES),max_length=900),
+    async def quotes(req:Request, mode:Mode="live", codes:str=Query(default=",".join(DEFAULT_CODES),max_length=QUOTE_LIST_LIMIT),
                      refresh:bool=False):
-        return await svc(req).quotes(mode,parse_codes(codes, 85),refresh=refresh)
+        return await svc(req).quotes(mode,parse_codes(codes, QUOTE_SYMBOL_LIMIT, QUOTE_LIST_LIMIT),refresh=refresh)
 
     @api.post("/api/stocks/screen")
     async def stock_screen(req: Request, query: ScreenRequest, mode: Mode = "live"):
@@ -787,7 +787,7 @@ def create_app(*, database=None, transport=None, access=None, ground_volume_root
     async def stream(ws:WebSocket):
         mode=ws.query_params.get("mode","live")
         try:
-            codes = codes_from(ws.query_params.get("codes", ",".join(DEFAULT_CODES)), 85)
+            codes = codes_from(ws.query_params.get("codes", ",".join(DEFAULT_CODES)), QUOTE_SYMBOL_LIMIT, QUOTE_LIST_LIMIT)
             if mode not in ("demo", "live"):
                 raise ValueError
         except ValueError:
@@ -830,7 +830,7 @@ def create_app(*, database=None, transport=None, access=None, ground_volume_root
                         if not isinstance(message, dict):
                             continue
                         if message.get("type") == "subscribe" and isinstance(message.get("codes"), str):
-                            updated = codes_from(message["codes"], 85)
+                            updated = codes_from(message["codes"], QUOTE_SYMBOL_LIMIT, QUOTE_LIST_LIMIT)
                             if updated != codes:
                                 codes = updated
                                 break

@@ -9,7 +9,7 @@ from starlette.responses import PlainTextResponse
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 HOST = re.compile(r"(?:127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?", re.ASCII)
 BODY_LIMIT = 16 * 1024
-WS_MESSAGE_LIMIT = 1024
+WS_MESSAGE_LIMIT = 2048
 WS_CLIENT_LIMIT = 12
 SERVER_LIMITS = {"proxy_headers":False, "limit_concurrency":64, "timeout_keep_alive":5,
                  "ws":"websockets", "ws_max_size":4096, "ws_max_queue":8, "ws_per_message_deflate":False}

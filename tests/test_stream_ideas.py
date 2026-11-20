@@ -5,13 +5,15 @@ from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from backend.adapters.demo import Demo
 from backend.adapters.live import Unavailable, response
 from backend.main import Market, create_app
 from backend.services.cache import Cache
 from backend.services.clock import SH
 from backend.services.ideas import prior_tail, rank_candidate, shortlist, window_open
-from backend.services.quotes import QuoteBatcher, quote_interval
+from backend.services.quotes import QUOTE_SYMBOL_LIMIT, QuoteBatcher, quote_interval
 
 
 def quote(code="sh600519", time="14:46:10", price=11.2, amount=2e8):
@@ -177,6 +179,46 @@ class IdeaTests(unittest.TestCase):
                 self.assertEqual(changed["quotes"]["data"][0]["code"],"sz000001")
                 ws.send_json({"type":"refresh"})
                 self.assertEqual(ws.receive_json()["clock"]["quote_interval_s"],5)
+
+    def test_full_watch_and_tracking_pools_keep_every_quote(self):
+        codes = [f"sh{600100+i}" for i in range(QUOTE_SYMBOL_LIMIT)]
+        long_form = ",".join(f"{code[2:]}.SH" for code in codes)
+        too_many = ",".join([*codes, "sh600519"])
+        batches = []
+        fast_quote = Demo.quotes
+
+        async def batched(provider, items):
+            batches.append(tuple(items))
+            return await fast_quote(provider, items)
+
+        app = create_app(database=":memory:", access="local",
+                         transport=httpx.MockTransport(lambda _: httpx.Response(503)))
+        with patch.object(Demo, "quotes", batched), TestClient(
+            app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000),
+        ) as client:
+            response = client.get("/api/stocks/quotes", params={"mode":"demo", "codes":long_form})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual([row["code"] for row in response.json()["data"]], codes)
+            self.assertEqual([len(batch) for batch in batches], [60, 60, 41])
+            self.assertEqual(client.get("/api/stocks/quotes", params={"mode":"demo", "codes":too_many}).status_code, 422)
+
+            ws_base = "ws://127.0.0.1/ws/market?mode=demo&codes="
+            with client.websocket_connect(ws_base + long_form) as websocket:
+                initial = websocket.receive_json()
+                self.assertEqual(initial["codes"], codes)
+                self.assertEqual([row["code"] for row in initial["quotes"]["data"]], codes)
+                # Move the selected chart to a different stock, while both pools stay subscribed.
+                updated = [*codes[:-1], "sh600519"]
+                websocket.send_json({"type":"subscribe", "codes":too_many})
+                websocket.send_json({"type":"subscribe", "codes":",".join(f"{code[2:]}.SH" for code in updated)})
+                next_frame = websocket.receive_json()
+                self.assertEqual(next_frame["codes"], updated)
+                self.assertEqual([row["code"] for row in next_frame["quotes"]["data"]], updated)
+
+            with self.assertRaises(WebSocketDisconnect) as rejected:
+                with client.websocket_connect(ws_base + too_many):
+                    self.fail("subscriptions beyond the quote limit must be rejected")
+            self.assertEqual(rejected.exception.code, 1008)
 
     def test_live_watch_screener_needs_only_quotes_without_fund_rules(self):
         def provider(req):
