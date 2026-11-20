@@ -32,6 +32,7 @@ from backend.services.hourly import HourlyScanner
 from backend.services.paper import PaperAccount
 from backend.services.global_market import GlobalMarket
 from backend.services.fund_flow import describe_flow
+from backend.services.ground_volume_engine import GroundVolumeEngine
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
@@ -470,7 +471,7 @@ def parse_codes(value, limit=60):
         raise HTTPException(422,str(exc)) from exc
 
 
-def create_app(*, database=None, transport=None, access=None):
+def create_app(*, database=None, transport=None, access=None, ground_volume_root=None):
     cloud = (access or os.getenv("PULSE_ACCESS", "local")) == "cloud"
     paper_enabled = not cloud or os.getenv("PULSE_PAPER_CLOUD") == "1"
     @asynccontextmanager
@@ -487,8 +488,12 @@ def create_app(*, database=None, transport=None, access=None):
             app.state.premarket.import_archive(os.getenv("PULSE_BOOTSTRAP_REPORT"))
             app.state.monitor = IntradayMonitor(app.state.market, enabled=cloud,
                                                auction_feed=FuyaoAuction(client, cloud=cloud))
+            app.state.ground_volume = GroundVolumeEngine(
+                app.state.market, ground_volume_root if ground_volume_root is not None else os.getenv("PULSE_GROUND_VOLUME_DIR")
+            )
             background = [asyncio.create_task(worker.loop()) for worker in (
                 app.state.market.hourly, app.state.market.sessions, app.state.premarket, app.state.monitor,
+                app.state.ground_volume,
                 *((app.state.market.paper,) if paper_enabled else ()))]
             try:
                 yield
@@ -586,6 +591,21 @@ def create_app(*, database=None, transport=None, access=None):
         rows = market.hourly.history() if mode == "live" else []
         return market.local(mode, {"rounds": rows, "running": market.hourly.running if mode == "live" else None},
                             "Pulse 小时筛选")
+
+    @api.get("/api/strategy/ground-volume-top20")
+    async def ground_volume_top20(
+        req: Request, slot: Literal["latest", "14:45", "15:15"] = "latest", mode: Mode = "live",
+    ):
+        if mode == "demo":
+            data = {"status": "live_only", "stale": False, "result": None, "expected_slot": None,
+                    "scheduled_slots": ["14:45", "15:15"], "error": None}
+        else:
+            data = req.app.state.ground_volume.results(now(), slot)
+        packet = svc(req).local(mode, data, "Pulse 地量严选")
+        packet["is_stale"] = data["stale"]
+        packet["cached"] = data["result"] is not None
+        packet["market_time"] = data["result"]["as_of"] if data["result"] else None
+        return packet
 
     @api.get("/api/market/global")
     async def global_quotes(req: Request, mode: Mode = "live"):

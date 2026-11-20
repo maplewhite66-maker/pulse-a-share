@@ -266,6 +266,10 @@ footer summary {cursor:pointer}
 .research-table table {font-size:12px}
 .research-table th,.research-table td {padding:9px 10px}
 .research-table th:first-child,.research-table td:first-child {padding-left:16px}
+.ground-volume-table table {min-width:1060px}
+.ground-volume-table td {vertical-align:top}
+.ground-volume-table td .micro {display:block}
+.ground-volume-table td details {margin-top:4px}
 .tracking-grid {display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);align-items:start;border-top:1px solid #253343}
 .track-detail {min-width:0;padding:12px 17px;border-left:1px solid #253343;background:#101a26}
 .track-title {display:flex;justify-content:space-between;align-items:flex-start;gap:8px}

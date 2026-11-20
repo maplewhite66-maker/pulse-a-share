@@ -13,6 +13,7 @@ const Premarket=lazy(()=>import('./premarket').then(module=>({default:module.Pre
 const NextSessionWatch=lazy(()=>import('./next-session-watch').then(module=>({default:module.NextSessionWatch})));
 const TradePlans=lazy(()=>import('./trade-plans').then(module=>({default:module.TradePlans})));
 const HourlyOpportunities=lazy(()=>import('./hourly-opportunities').then(module=>({default:module.HourlyOpportunities})));
+const GroundVolumeTop20=lazy(()=>import('./components/GroundVolumeTop20').then(module=>({default:module.GroundVolumeTop20})));
 const PaperTrading=lazy(()=>import('./paper-trading').then(module=>({default:module.PaperTrading})));
 const GlobalMarket=lazy(()=>import('./global-market').then(module=>({default:module.GlobalMarket})));
 const PriceChart=lazy(()=>import('./charts').then(module=>({default:module.PriceChart})));
@@ -27,7 +28,7 @@ type PanelKey=keyof typeof panelNames;
 type Settings={hidden:PanelKey[];width:'standard'|'wide';sectorFirst:boolean;newsFirst:boolean};
 const defaultLayout:Settings={hidden:[],width:'standard',sectorFirst:false,newsFirst:false};
 const defaultThresholds={pct:3,turnover:5,rapid:1,volume:2.5};
-const researchPages=['tracking','screen','ideas','tomorrow','plan','hourly','paper','global','premarket','monitor'] as const;
+const researchPages=['tracking','screen','ideas','tomorrow','plan','hourly','ground-volume','paper','global','premarket','monitor'] as const;
 type ResearchPage=typeof researchPages[number];
 function researchPage(id:string){return researchPages.find(page=>page===id.split('?',1)[0])??null}
 
@@ -281,7 +282,7 @@ function App(){
   </Panel>;
   return <div className="shell" id="top">
     <aside className="rail"><button className="logo" aria-label="回到总览" onClick={()=>navigate('top')}><Glyph name="pulse" size={27}/></button>
-      <nav>{[['top','grid','总览'],['premarket','globe','盘前报告'],['watch','star','自选'],['sectors','layers','板块'],['alerts','bell','预警'],['monitor','clock','全天策略'],['tracking','target','追踪'],['plan','layers','交易复盘'],['screen','filter','选股'],['hourly','clock','超短线'],['paper','pulse','模拟交易'],['ideas','pulse','开收盘'],['global','globe','全球行情'],['tomorrow','star','明日关注'],['price','pulse','走势'],['tail','clock','尾盘']].filter(([id])=>canDemo||id!=='paper').map(([id,icon,text])=><button key={id} className={id===activeNav?'active':''} onClick={()=>navigate(id)}><Glyph name={icon} size={18}/><small>{text}</small></button>)}</nav>
+      <nav>{[['top','grid','总览'],['premarket','globe','盘前报告'],['watch','star','自选'],['sectors','layers','板块'],['alerts','bell','预警'],['monitor','clock','全天策略'],['tracking','target','追踪'],['plan','layers','交易复盘'],['screen','filter','选股'],['ground-volume','filter','地量严选'],['hourly','clock','超短线'],['paper','pulse','模拟交易'],['ideas','pulse','开收盘'],['global','globe','全球行情'],['tomorrow','star','明日关注'],['price','pulse','走势'],['tail','clock','尾盘']].filter(([id])=>canDemo||id!=='paper').map(([id,icon,text])=><button key={id} className={id===activeNav?'active':''} onClick={()=>navigate(id)}><Glyph name={icon} size={18}/><small>{text}</small></button>)}</nav>
       <span className="rail-version">PULSE 3.1</span></aside>
     <main className="workspace">
       <header className="top"><div className="brand"><div className="kicker"><span className="tag-line"/> PULSE <span className="sep">/</span> MARKET TERMINAL</div><h1>A 股智能盯盘台</h1></div>
@@ -319,6 +320,8 @@ function App(){
           choose={code=>{setSelected(code);setDraftPrice(undefined)}} openChart={openChart}/>}
         {research==='hourly'&&<HourlyOpportunities mode={mode} revision={revision} openChart={openChart}
           openPlan={(code,price)=>{setSelected(code);navigate('plan');setDraftPrice(price)}}/>}
+        {research==='ground-volume'&&<GroundVolumeTop20 mode={mode} revision={revision} addWatch={addWatch} addTrack={addTrack}
+          openChart={(code,chartView)=>{setView(chartView);setPeriod(chartView==='line'?'m1':'day');openChart(code)}}/>}
         {research==='paper'&&<PaperTrading revision={revision} openChart={code=>{setMode('live');openChart(code)}}/>}
         </Suspense>
         <div className="overview" hidden={research!==null}>
