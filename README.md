@@ -1,4 +1,4 @@
-# Pulse A股智能动态盯盘系统 3.1
+# Pulse A股智能动态盯盘系统 4.0
 
 线上入口：https://pulse-a-share-production.up.railway.app/
 
@@ -147,3 +147,7 @@ npm run build --prefix frontend
 ## 地量准备启动股 TOP 20
 
 通过侧栏「地量严选」查看。授权快照目录、字段协议、筛选和回测口径见 [接入说明](docs/ground-volume-top20.md)。
+
+## PULSE 4.0 资金工作台
+
+板块资金动态、个股资金画像、风格回测与四维融合的接口、数据接入及验证流程见 [PULSE 4.0 说明](docs/pulse-v4-workbench.md)。

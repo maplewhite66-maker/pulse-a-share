@@ -46,7 +46,7 @@ class AccessTests(unittest.TestCase):
             self.assertIn("script-src 'self'",csp)
             self.assertIn("frame-ancestors 'none'",csp)
             self.assertIn("ws://127.0.0.1:8765",csp)
-            self.assertEqual(c.get("/docs").json()["info"]["version"],"3.1.0")
+            self.assertEqual(c.get("/docs").json()["info"]["version"],"4.0.0")
             url = "/api/stocks/screen?mode=demo"
             self.assertEqual(c.post(url,json={"scope":"watch","codes":["600519"]}).status_code,200)
             chunks = (chunk for chunk in (b" " * (BODY_LIMIT - 1), b" " * 2))

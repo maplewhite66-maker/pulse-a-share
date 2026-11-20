@@ -270,6 +270,11 @@ footer summary {cursor:pointer}
 .ground-volume-table td {vertical-align:top}
 .ground-volume-table td .micro {display:block}
 .ground-volume-table td details {margin-top:4px}
+.stream-chart {height:clamp(270px,38vw,450px);margin:8px 14px;min-width:0}
+.sector-stream-inline .stream-chart {height:320px;margin-inline:8px}
+.v4-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;padding:14px 20px}
+.v4-grid article {background:#132231;border:1px solid #31465a;border-radius:5px;padding:10px}
+.v4-grid p {font-size:11px;color:var(--muted);margin-bottom:0}
 .tracking-grid {display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);align-items:start;border-top:1px solid #253343}
 .track-detail {min-width:0;padding:12px 17px;border-left:1px solid #253343;background:#101a26}
 .track-title {display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
