@@ -4,6 +4,7 @@ import {Screener,Tracking} from './research';
 import {BuyCandidates} from './buy-candidates';
 import {WeightedSectorTreemap} from './weighted-sector-treemap';
 import {newTrack,TRACK_LIMIT,type Tracked} from './tracking';
+import {appendWatchCodes,mergeObservationPools,POOLED_QUOTE_LIMIT,readObservationPool,WATCH_LIMIT} from './observation-pools';
 import {externalUrl,csv,fmt,money,percent,signed,ticker,timeText,tone,latestPacket,useFeed,useSaved,useStream,
   type Alert,type Bars,type Clock,type Flow,type Mode,type Mood,type News,type Packet,type Quote,type Ranking,type RoleData,type Score,type Sector,type Tail} from './data';
 import './style.css';
@@ -142,6 +143,9 @@ function App(){
   const [audio,setAudio]=useState(false),[notify,setNotify]=useState(false);
   const audioContext=useRef<AudioContext|null>(null),lastAlert=useRef<Record<string,string>>({});
   const fileInput=useRef<HTMLInputElement>(null);
+  const poolInput=useRef<HTMLInputElement>(null);
+  const currentPools=useRef({watch,tracking});
+  currentPools.current={watch,tracking};
   const codes=Array.from(new Set([selected,...watch,...tracked.map(r=>r.code)])).sort().join(',');
   const watched=watch.join(',');
   const stream=useStream(mode,codes,revision);
@@ -206,7 +210,9 @@ function App(){
   const addTrack=(code:string)=>{
     if(indices.some(([id])=>id===code))return '请选择股票代码，指数可在总览中查看。';
     if(tracked.some(r=>r.code===code))return '已在当前模式的追踪列表';
-    if(tracked.length>=TRACK_LIMIT)return '追踪列表最多 20 只';
+    if(tracked.length>=TRACK_LIMIT)return '追踪列表最多 '+TRACK_LIMIT+' 只';
+    if(!watch.includes(code)&&new Set([...watch,...tracked.map(r=>r.code)]).size>=POOLED_QUOTE_LIMIT)
+      return '自选和追踪合计已达 '+POOLED_QUOTE_LIMIT+' 只';
     setTracked(old=>old.some(r=>r.code===code)||old.length>=TRACK_LIMIT?old:[...old,newTrack(code,quoteByCode.get(code)?.name)]);
     return null;
   };
@@ -218,8 +224,9 @@ function App(){
   };
   const addWatch=(code:string)=>{
     if(watch.includes(code))return '已在自选池';
-    if(watch.length>=60)return '自选池最多保存 60 只';
-    setWatch(old=>old.includes(code)||old.length>=60?old:[...old,code]);
+    if(watch.length>=WATCH_LIMIT)return '自选池最多保存 '+WATCH_LIMIT+' 只';
+    if(appendWatchCodes(watch,[code],tracking).skipped)return '自选和追踪合计已达 '+POOLED_QUOTE_LIMIT+' 只';
+    setWatch(old=>appendWatchCodes(old,[code],tracking).watch);
     return null;
   };
   const screenSelectedBoard=()=>{
@@ -247,12 +254,26 @@ function App(){
     const values=raw.split(/[\s,;，；]+/).map(s=>s.replace(/^"|"$/g,'')).filter(Boolean);
     const valid=values.map(ticker).filter((c):c is string=>c!==null);
     if(!valid.length){setWatchError('请输入股票代码，例如 600519、000001 或 sh000001');return}
-    const next=Array.from(new Set([...watch,...valid]));
-    setWatch(next.slice(0,60));
-    if(next.indexOf(valid[0])<60)choose(valid[0]);
+    const next=appendWatchCodes(watch,valid,tracking);
+    setWatch(next.watch);
+    if(next.watch.includes(valid[0]))choose(valid[0]);
     setInput('');
-    setWatchError(next.length>60?'自选池最多保存 60 只':valid.length<values.length?'已加入有效代码，跳过了无法识别的字段':'');
+    setWatchError(next.skipped?'自选或合计容量已满，跳过 '+next.skipped+' 只。':valid.length<values.length?'已加入有效代码，跳过了无法识别的字段':'');
   };
+  async function importObservationPools(file:File){
+    if(file.size>1_000_000){setWatchError('文件上限 1 MB');return}
+    try{
+      const pool=readObservationPool(await file.text());
+      const {watch:existing,tracking:tracks}=currentPools.current;
+      const result=mergeObservationPools(existing,tracks,pool);
+      if(result.watchAdded)setWatch(result.watch);
+      if(result.trackAdded)setTracking(old=>({...old,live:result.tracked}));
+      setWatchError('真实模式自选新增 '+result.watchAdded+' 只，个股追踪新增 '+result.trackAdded+' 只'+
+        (result.skipped?'，因容量跳过 '+result.skipped+' 只。':'。'));
+    }catch(error){
+      setWatchError(error instanceof SyntaxError?'无法解析观察池 JSON。':error instanceof Error?error.message:'无法读取双池文件。');
+    }
+  }
   const exportWatch=()=>csv('Pulse-watchlist.csv',[['code'],...watch.map(c=>[c])]);
   const exportAlerts=()=>csv('Pulse-alerts-'+mode+'.csv',[['模式','标的','事件','数值','阈值','单位','时间','数据源','来源链接'],...(alerts?.data??[]).map(a=>[a.mode,a.code,a.event,a.value,a.threshold,a.unit,a.market_time,a.source,a.source_url])]);
   const chooseSector=(code:string)=>setBoard(board===code?null:code);
@@ -361,13 +382,18 @@ function App(){
           <div className="column left-col">
           {show('watch')&&<Panel id="watch" kicker="WATCHLIST" title="我的自选" actions={<span className="badge">{watch.length} 只</span>}>
             <form className="search" onSubmit={e=>{e.preventDefault();add(input)}}><Glyph name="search" size={14}/><input aria-label="搜索或输入股票代码" placeholder="代码搜索 / 批量添加" value={input} onChange={e=>setInput(e.target.value)}/><button aria-label="添加自选" title="添加自选">+</button></form>
-            {watchError&&<div className="watch-error">{watchError}</div>}
+            {watchError&&<div className="watch-error" role="status">{watchError}</div>}
             <div className="watch-head"><span>标的 / 代码</span><span>最新 / 涨跌</span></div>
             <div className="watch-list">{symbols.map(({code,q})=><div className={'watch-row '+(selected===code?'selected':'')} key={code}>
               <button className="watch-select" onClick={()=>choose(code)}><span><strong>{q?.name??code.slice(2)}</strong><small>{code.toUpperCase()}{q?.is_stale?' · 滞后':''}</small></span><span><b>{fmt(q?.price)}</b><small className={tone(q?.pct)}>{percent(q?.pct)}</small></span></button>
               <button className="remove" aria-label={'删除 '+(q?.name??code)} onClick={()=>setWatch(watch.filter(c=>c!==code))}>×</button></div>)}
               {!watch.length&&<Empty text="输入代码添加自选股"/>}</div>
-            <div className="button-row panel-pad"><input ref={fileInput} type="file" accept=".csv,.txt,text/csv,text/plain" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f){if(f.size>1_000_000)setWatchError('文件上限 1 MB');else void f.text().then(add).catch(()=>setWatchError('无法读取导入文件'))}}}/><button className="btn" onClick={()=>fileInput.current?.click()}>导入</button><button className="btn" onClick={exportWatch}>导出</button></div><Source p={quotes}/>
+            <div className="button-row panel-pad"><input ref={fileInput} type="file" accept=".csv,.txt,text/csv,text/plain" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f){if(f.size>1_000_000)setWatchError('文件上限 1 MB');else void f.text().then(add).catch(()=>setWatchError('无法读取导入文件'))}}}/>
+              <input ref={poolInput} type="file" aria-label="观察池文件" accept=".json,application/json" hidden
+                onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void importObservationPools(file)}}/>
+              <button className="btn" onClick={()=>fileInput.current?.click()}>导入</button>
+              <button className="btn" onClick={()=>poolInput.current?.click()}>导入双池</button>
+              <button className="btn" onClick={exportWatch}>导出</button></div><Source p={quotes}/>
           </Panel>}
           {show('watch')&&<Panel kicker="QUOTE DETAILS" title="报价细节"><div className="panel-pad">
             <CapLine label="昨收" value={fmt(current?.previous_close)}/><CapLine label="今开" value={fmt(current?.open)}/>
