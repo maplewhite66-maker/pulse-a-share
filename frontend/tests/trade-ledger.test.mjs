@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyPlan,fillError,mergeTradeReview,parseTradeReview,summarize} from '../src/trade-ledger.ts';
+import {emptyPlan,estimateBoardLots,fillError,mergeTradeReview,parseTradeReview,summarize} from '../src/trade-ledger.ts';
+
+test('position estimate rounds down without inventing an affordable board lot',()=>{
+  assert.deepEqual(estimateBoardLots('100000','12.55','25'),{lots:19,shares:1900,gross:23845});
+  assert.deepEqual(estimateBoardLots('1255','12.55','100'),{lots:1,shares:100,gross:1255});
+  assert.deepEqual(estimateBoardLots('1254.99','12.55','100'),{lots:0,shares:0,gross:0});
+  assert.equal(estimateBoardLots('1255','0','100'),null);
+  assert.equal(estimateBoardLots('1255','12.55','101'),null);
+  assert.equal(estimateBoardLots('1e6','12.55','25'),null);
+  assert.equal(estimateBoardLots('','12.55','25'),null);
+});
 
 test('average cost includes fees, sale only consumes proportional basis',()=>{
   const fill={side:'buy',price:10,quantity:200,fee:10,day:'2026-11-10'};

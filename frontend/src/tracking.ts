@@ -1,6 +1,6 @@
 import type {Quote} from './data';
 
-export const TRACK_LIMIT=20;
+export const TRACK_LIMIT=100;
 export type Sample={time:string;price:number;pct:number|null};
 export type TargetEvent={time:string;price:number;target:number;direction:'upper'|'lower'};
 export type Tracked={

@@ -2,7 +2,9 @@ import {lazy,Suspense,useCallback,useEffect,useRef,useState,type ReactNode,type 
 import {createRoot} from 'react-dom/client';
 import {Screener,Tracking} from './research';
 import {BuyCandidates} from './buy-candidates';
+import {WeightedSectorTreemap} from './weighted-sector-treemap';
 import {newTrack,TRACK_LIMIT,type Tracked} from './tracking';
+import {appendWatchCodes,mergeObservationPools,POOLED_QUOTE_LIMIT,readObservationPool,WATCH_LIMIT} from './observation-pools';
 import {externalUrl,csv,fmt,money,percent,signed,ticker,timeText,tone,latestPacket,useFeed,useSaved,useStream,
   type Alert,type Bars,type Clock,type Flow,type Mode,type Mood,type News,type Packet,type Quote,type Ranking,type RoleData,type Score,type Sector,type Tail} from './data';
 import './style.css';
@@ -12,6 +14,11 @@ const Premarket=lazy(()=>import('./premarket').then(module=>({default:module.Pre
 const NextSessionWatch=lazy(()=>import('./next-session-watch').then(module=>({default:module.NextSessionWatch})));
 const TradePlans=lazy(()=>import('./trade-plans').then(module=>({default:module.TradePlans})));
 const HourlyOpportunities=lazy(()=>import('./hourly-opportunities').then(module=>({default:module.HourlyOpportunities})));
+const GroundVolumeTop20=lazy(()=>import('./components/GroundVolumeTop20').then(module=>({default:module.GroundVolumeTop20})));
+const SectorLiveFlow=lazy(()=>import('./components/SectorLiveFlow').then(module=>({default:module.SectorLiveFlow})));
+const CapitalProfilerPanel=lazy(()=>import('./components/CapitalProfilerPanel').then(module=>({default:module.CapitalProfilerPanel})));
+const HotMoneySimulator=lazy(()=>import('./components/HotMoneySimulator').then(module=>({default:module.HotMoneySimulator})));
+const PulseV4Strategy=lazy(()=>import('./components/PulseV4Strategy').then(module=>({default:module.PulseV4Strategy})));
 const PaperTrading=lazy(()=>import('./paper-trading').then(module=>({default:module.PaperTrading})));
 const GlobalMarket=lazy(()=>import('./global-market').then(module=>({default:module.GlobalMarket})));
 const PriceChart=lazy(()=>import('./charts').then(module=>({default:module.PriceChart})));
@@ -26,7 +33,8 @@ type PanelKey=keyof typeof panelNames;
 type Settings={hidden:PanelKey[];width:'standard'|'wide';sectorFirst:boolean;newsFirst:boolean};
 const defaultLayout:Settings={hidden:[],width:'standard',sectorFirst:false,newsFirst:false};
 const defaultThresholds={pct:3,turnover:5,rapid:1,volume:2.5};
-const researchPages=['tracking','screen','ideas','tomorrow','plan','hourly','paper','global','premarket','monitor'] as const;
+const researchPages=['tracking','screen','ideas','tomorrow','plan','hourly','ground-volume','paper','global','premarket','monitor',
+  'sector-live','capital-profile','hot-money','pulse-v4','close-review'] as const;
 type ResearchPage=typeof researchPages[number];
 function researchPage(id:string){return researchPages.find(page=>page===id.split('?',1)[0])??null}
 
@@ -135,6 +143,9 @@ function App(){
   const [audio,setAudio]=useState(false),[notify,setNotify]=useState(false);
   const audioContext=useRef<AudioContext|null>(null),lastAlert=useRef<Record<string,string>>({});
   const fileInput=useRef<HTMLInputElement>(null);
+  const poolInput=useRef<HTMLInputElement>(null);
+  const currentPools=useRef({watch,tracking});
+  currentPools.current={watch,tracking};
   const codes=Array.from(new Set([selected,...watch,...tracked.map(r=>r.code)])).sort().join(',');
   const watched=watch.join(',');
   const stream=useStream(mode,codes,revision);
@@ -186,10 +197,22 @@ function App(){
     if(!show('price'))setLayout(old=>({...old,hidden:old.hidden.filter(panel=>panel!=='price')}));
     navigate('price');
   };
+  const openCapitalProfile=(code:string)=>{
+    const normalized=ticker(code);
+    if(!normalized||indices.some(([id])=>id===normalized))return;
+    setSelected(normalized);
+    navigate('capital-profile');
+  };
+  const openSectorStock=(code:string)=>{
+    const normalized=ticker(code);
+    if(normalized)openChart(normalized);
+  };
   const addTrack=(code:string)=>{
     if(indices.some(([id])=>id===code))return '请选择股票代码，指数可在总览中查看。';
     if(tracked.some(r=>r.code===code))return '已在当前模式的追踪列表';
-    if(tracked.length>=TRACK_LIMIT)return '追踪列表最多 20 只';
+    if(tracked.length>=TRACK_LIMIT)return '追踪列表最多 '+TRACK_LIMIT+' 只';
+    if(!watch.includes(code)&&new Set([...watch,...tracked.map(r=>r.code)]).size>=POOLED_QUOTE_LIMIT)
+      return '自选和追踪合计已达 '+POOLED_QUOTE_LIMIT+' 只';
     setTracked(old=>old.some(r=>r.code===code)||old.length>=TRACK_LIMIT?old:[...old,newTrack(code,quoteByCode.get(code)?.name)]);
     return null;
   };
@@ -201,8 +224,9 @@ function App(){
   };
   const addWatch=(code:string)=>{
     if(watch.includes(code))return '已在自选池';
-    if(watch.length>=60)return '自选池最多保存 60 只';
-    setWatch(old=>old.includes(code)||old.length>=60?old:[...old,code]);
+    if(watch.length>=WATCH_LIMIT)return '自选池最多保存 '+WATCH_LIMIT+' 只';
+    if(appendWatchCodes(watch,[code],tracking).skipped)return '自选和追踪合计已达 '+POOLED_QUOTE_LIMIT+' 只';
+    setWatch(old=>appendWatchCodes(old,[code],tracking).watch);
     return null;
   };
   const screenSelectedBoard=()=>{
@@ -230,12 +254,26 @@ function App(){
     const values=raw.split(/[\s,;，；]+/).map(s=>s.replace(/^"|"$/g,'')).filter(Boolean);
     const valid=values.map(ticker).filter((c):c is string=>c!==null);
     if(!valid.length){setWatchError('请输入股票代码，例如 600519、000001 或 sh000001');return}
-    const next=Array.from(new Set([...watch,...valid]));
-    setWatch(next.slice(0,60));
-    if(next.indexOf(valid[0])<60)choose(valid[0]);
+    const next=appendWatchCodes(watch,valid,tracking);
+    setWatch(next.watch);
+    if(next.watch.includes(valid[0]))choose(valid[0]);
     setInput('');
-    setWatchError(next.length>60?'自选池最多保存 60 只':valid.length<values.length?'已加入有效代码，跳过了无法识别的字段':'');
+    setWatchError(next.skipped?'自选或合计容量已满，跳过 '+next.skipped+' 只。':valid.length<values.length?'已加入有效代码，跳过了无法识别的字段':'');
   };
+  async function importObservationPools(file:File){
+    if(file.size>1_000_000){setWatchError('文件上限 1 MB');return}
+    try{
+      const pool=readObservationPool(await file.text());
+      const {watch:existing,tracking:tracks}=currentPools.current;
+      const result=mergeObservationPools(existing,tracks,pool);
+      if(result.watchAdded)setWatch(result.watch);
+      if(result.trackAdded)setTracking(old=>({...old,live:result.tracked}));
+      setWatchError('真实模式自选新增 '+result.watchAdded+' 只，个股追踪新增 '+result.trackAdded+' 只'+
+        (result.skipped?'，因容量跳过 '+result.skipped+' 只。':'。'));
+    }catch(error){
+      setWatchError(error instanceof SyntaxError?'无法解析观察池 JSON。':error instanceof Error?error.message:'无法读取双池文件。');
+    }
+  }
   const exportWatch=()=>csv('Pulse-watchlist.csv',[['code'],...watch.map(c=>[c])]);
   const exportAlerts=()=>csv('Pulse-alerts-'+mode+'.csv',[['模式','标的','事件','数值','阈值','单位','时间','数据源','来源链接'],...(alerts?.data??[]).map(a=>[a.mode,a.code,a.event,a.value,a.threshold,a.unit,a.market_time,a.source,a.source_url])]);
   const chooseSector=(code:string)=>setBoard(board===code?null:code);
@@ -280,8 +318,10 @@ function App(){
   </Panel>;
   return <div className="shell" id="top">
     <aside className="rail"><button className="logo" aria-label="回到总览" onClick={()=>navigate('top')}><Glyph name="pulse" size={27}/></button>
-      <nav>{[['top','grid','总览'],['premarket','globe','盘前报告'],['watch','star','自选'],['sectors','layers','板块'],['alerts','bell','预警'],['monitor','clock','全天策略'],['tracking','target','追踪'],['plan','layers','交易复盘'],['screen','filter','选股'],['hourly','clock','超短线'],['paper','pulse','模拟交易'],['ideas','pulse','开收盘'],['global','globe','全球行情'],['tomorrow','star','明日关注'],['price','pulse','走势'],['tail','clock','尾盘']].filter(([id])=>canDemo||id!=='paper').map(([id,icon,text])=><button key={id} className={id===activeNav?'active':''} onClick={()=>navigate(id)}><Glyph name={icon} size={18}/><small>{text}</small></button>)}</nav>
-      <span className="rail-version">PULSE 3.1</span></aside>
+      <nav>{[['top','grid','总览'],['premarket','globe','盘前报告'],['watch','star','自选'],['sectors','layers','板块'],
+        ['sector-live','layers','资金动态'],['capital-profile','target','资金画像'],['hot-money','pulse','风格回测'],['pulse-v4','filter','四维融合'],
+        ['alerts','bell','预警'],['monitor','clock','全天策略'],['tracking','target','追踪'],['plan','layers','交易复盘'],['screen','filter','选股'],['ground-volume','filter','地量严选'],['hourly','clock','超短线'],['paper','pulse','模拟交易'],['ideas','pulse','开收盘'],['close-review','clock','收盘复盘'],['global','globe','全球行情'],['tomorrow','star','明日关注'],['price','pulse','走势'],['tail','clock','尾盘']].filter(([id])=>canDemo||id!=='paper').map(([id,icon,text])=><button key={id} className={id===activeNav?'active':''} onClick={()=>navigate(id)}><Glyph name={icon} size={18}/><small>{text}</small></button>)}</nav>
+      <span className="rail-version">PULSE 4.0</span></aside>
     <main className="workspace">
       <header className="top"><div className="brand"><div className="kicker"><span className="tag-line"/> PULSE <span className="sep">/</span> MARKET TERMINAL</div><h1>A 股智能盯盘台</h1></div>
       <div className="top-actions"><QuoteClock sample={quotes?.fetched_at??indexData?.fetched_at} cadence={cadence} stale={Boolean(quotes?.is_stale)}/>
@@ -304,7 +344,8 @@ function App(){
           visible={research==='tracking'} add={addTrack} openChart={openChart} focus={trackFocus}/>
         <Screener mode={mode} watch={watch} tracked={tracked} board={screenBoard} visible={research==='screen'}
           revision={revision} openChart={openChart} addWatch={addWatch} addTrack={addTrack}/>
-        <BuyCandidates mode={mode} clock={clock} visible={research==='ideas'} revision={revision}
+        <BuyCandidates key={research==='close-review'?'close-review':'ideas'} startInArchive={research==='close-review'}
+          mode={mode} clock={clock} visible={research==='ideas'||research==='close-review'} revision={revision}
           watch={watch} tracked={tracked} openChart={openChart} addWatch={addWatch} addTrack={addTrack}/>
         <Suspense fallback={<div className="panel"><Empty text="正在加载工作台…"/></div>}>
         {research==='monitor'&&<LiveStrategy revision={revision} openChart={openChart}
@@ -318,6 +359,12 @@ function App(){
           choose={code=>{setSelected(code);setDraftPrice(undefined)}} openChart={openChart}/>}
         {research==='hourly'&&<HourlyOpportunities mode={mode} revision={revision} openChart={openChart}
           openPlan={(code,price)=>{setSelected(code);navigate('plan');setDraftPrice(price)}}/>}
+        {research==='ground-volume'&&<GroundVolumeTop20 mode={mode} revision={revision} addWatch={addWatch} addTrack={addTrack}
+          openChart={(code,chartView)=>{setView(chartView);setPeriod(chartView==='line'?'m1':'day');openChart(code)}}/>}
+        {research==='sector-live'&&<SectorLiveFlow mode={mode} revision={revision} openStock={openSectorStock}/>}
+        {research==='capital-profile'&&<CapitalProfilerPanel mode={mode} revision={revision} code={stockSelected?selected:(watch[0]??seed[0])} openChart={openChart}/>}
+        {research==='hot-money'&&<HotMoneySimulator mode={mode} revision={revision} openChart={openChart}/>}
+        {research==='pulse-v4'&&<PulseV4Strategy mode={mode} revision={revision} openChart={openChart} openProfile={openCapitalProfile}/>}
         {research==='paper'&&<PaperTrading revision={revision} openChart={code=>{setMode('live');openChart(code)}}/>}
         </Suspense>
         <div className="overview" hidden={research!==null}>
@@ -335,13 +382,18 @@ function App(){
           <div className="column left-col">
           {show('watch')&&<Panel id="watch" kicker="WATCHLIST" title="我的自选" actions={<span className="badge">{watch.length} 只</span>}>
             <form className="search" onSubmit={e=>{e.preventDefault();add(input)}}><Glyph name="search" size={14}/><input aria-label="搜索或输入股票代码" placeholder="代码搜索 / 批量添加" value={input} onChange={e=>setInput(e.target.value)}/><button aria-label="添加自选" title="添加自选">+</button></form>
-            {watchError&&<div className="watch-error">{watchError}</div>}
+            {watchError&&<div className="watch-error" role="status">{watchError}</div>}
             <div className="watch-head"><span>标的 / 代码</span><span>最新 / 涨跌</span></div>
             <div className="watch-list">{symbols.map(({code,q})=><div className={'watch-row '+(selected===code?'selected':'')} key={code}>
               <button className="watch-select" onClick={()=>choose(code)}><span><strong>{q?.name??code.slice(2)}</strong><small>{code.toUpperCase()}{q?.is_stale?' · 滞后':''}</small></span><span><b>{fmt(q?.price)}</b><small className={tone(q?.pct)}>{percent(q?.pct)}</small></span></button>
               <button className="remove" aria-label={'删除 '+(q?.name??code)} onClick={()=>setWatch(watch.filter(c=>c!==code))}>×</button></div>)}
               {!watch.length&&<Empty text="输入代码添加自选股"/>}</div>
-            <div className="button-row panel-pad"><input ref={fileInput} type="file" accept=".csv,.txt,text/csv,text/plain" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f){if(f.size>1_000_000)setWatchError('文件上限 1 MB');else void f.text().then(add).catch(()=>setWatchError('无法读取导入文件'))}}}/><button className="btn" onClick={()=>fileInput.current?.click()}>导入</button><button className="btn" onClick={exportWatch}>导出</button></div><Source p={quotes}/>
+            <div className="button-row panel-pad"><input ref={fileInput} type="file" accept=".csv,.txt,text/csv,text/plain" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f){if(f.size>1_000_000)setWatchError('文件上限 1 MB');else void f.text().then(add).catch(()=>setWatchError('无法读取导入文件'))}}}/>
+              <input ref={poolInput} type="file" aria-label="观察池文件" accept=".json,application/json" hidden
+                onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void importObservationPools(file)}}/>
+              <button className="btn" onClick={()=>fileInput.current?.click()}>导入</button>
+              <button className="btn" onClick={()=>poolInput.current?.click()}>导入双池</button>
+              <button className="btn" onClick={exportWatch}>导出</button></div><Source p={quotes}/>
           </Panel>}
           {show('watch')&&<Panel kicker="QUOTE DETAILS" title="报价细节"><div className="panel-pad">
             <CapLine label="昨收" value={fmt(current?.previous_close)}/><CapLine label="今开" value={fmt(current?.open)}/>
@@ -362,7 +414,8 @@ function App(){
             <div className="price-chart">{bars.length?<Suspense fallback={<Empty text="正在加载图表"/>}><PriceChart bars={bars} view={view} period={period} volumeUnit={chart?.data?.volume_unit??'手'}/></Suspense>:<Empty text={chart?.error||'正在读取价格序列'}/>}</div>
             <div className="subnav"><Tabs label="个股详情" value={detail} onChange={setDetail} items={[[ 'summary','走势摘要'],['flow','主力资金']]}/>
               {detail==='flow'&&<Tabs label="资金序列" value={flowSpan} onChange={setFlowSpan} items={[[ 'minute','当日'],['day','日级']]}/>}
-              {stockSelected&&<button className="btn" onClick={trackCurrent}>{tracked.some(r=>r.code===selected)?'查看追踪':'追踪个股'}</button>}</div>
+              {stockSelected&&<><button className="btn" onClick={trackCurrent}>{tracked.some(r=>r.code===selected)?'查看追踪':'追踪个股'}</button>
+                <button className="btn" onClick={()=>openCapitalProfile(selected)}>资金画像</button></>}</div>
             {detail==='flow'?<><StockFlowSummary packet={stockFlow}/><div className="mini-chart">{stockFlow?.data?.length?<Suspense fallback={<Empty text="正在加载图表"/>}><FlowChart rows={stockFlow.data} label={stockFlow.flow?.cumulative?'个股主力资金当日累计净额':'个股主力资金净额'}/></Suspense>:<Empty text={stockFlow?.error||'主力资金序列未接入'}/>}</div><Source p={stockFlow}/></>:
               <div className="summary-line"><span>最新 K 线收盘 <b>{fmt(lastBar?.close)}</b></span><span>成交量单位 <b>{chart?.data?.volume_unit??'—'}</b></span><span>复权 <b>{{qfq:'前复权',hfq:'后复权',none:'不复权'}[chart?.data?.adjust??'']??'—'}</b></span></div>}
             <Source p={chart}/>
@@ -370,7 +423,9 @@ function App(){
           {show('sectors')&&<Panel id="sectors" className="sector-panel" kicker="CAPITAL ROTATION" title={<>板块资金 <small>TOP 20</small></>} actions={<Tabs label="板块视图" value={sectorView} onChange={setSectorView} items={[[ 'table','榜单'],['heat','热力图']]}/>}>
             <div className="sector-controls"><Tabs label="板块类别" items={kinds} value={kind} onChange={v=>{setKind(v);setBoard(null)}}/><Tabs label="资金周期" items={spans} value={span} onChange={v=>{setSpan(v);setBoard(null)}}/>
               <Tabs label="资金方向" items={[[ 'inflow','净流入'],['outflow','净流出']]} value={order} onChange={v=>{setOrder(v);setBoard(null)}}/></div>
-            {rows.length?(sectorView==='heat'?<div className="heatmap">{rows.map(s=><button key={s.code} style={{background:s.main_net>0?'#b74252':'#187768',opacity:.46+Math.min(.54,Math.abs(s.main_net)/(Math.max(...rows.map(x=>Math.abs(x.main_net)))||1)*.54)}} className={board===s.code?'picked':''} onClick={()=>chooseSector(s.code)}><strong>{s.name}</strong><small>{percent(s.pct)}</small><b>{money(s.main_net,true)}</b></button>)}</div>:
+            {inOverview&&sectorView==='heat'&&mode==='live'&&kind!=='region'&&span==='today'?
+              <Suspense fallback={<Empty text="正在加载资金热力图"/>}><SectorLiveFlow mode={mode} revision={revision} openStock={openSectorStock} embedded/></Suspense>:
+              rows.length?(sectorView==='heat'?<WeightedSectorTreemap sectors={rows} selected={board} onSelect={chooseSector}/>:
               <div className="table-wrap sector-table"><table><thead><tr><th>排名 / 板块</th><th>涨跌幅</th><th>主力净额</th><th>成交额</th><th>领涨股</th><th>热度</th></tr></thead><tbody>{rows.map(s=><tr key={s.code} className={board===s.code?'picked':''}>
                 <td><button className="plain row-link" onClick={()=>chooseSector(s.code)}><span className="rank">{String(s.rank).padStart(2,'0')}</span>{s.name}<small className={tone(s.rank_delta)}>{s.rank_delta?signed(s.rank_delta,0):''}</small></button></td>
                 <td className={tone(s.pct)}>{percent(s.pct)}</td><td className={tone(s.main_net)}>{money(s.main_net,true)}</td><td>{money(s.amount)}</td><td>{s.leader||'—'}</td><td>{fmt(s.heat.score,0)}</td></tr>)}</tbody></table></div>):

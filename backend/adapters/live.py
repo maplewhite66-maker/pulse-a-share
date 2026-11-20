@@ -253,12 +253,14 @@ class Live:
             raise Unavailable("东方财富 · 板块或证券列表为空")
         return rows, int(data.get("total") or 0), payload["_source_url"]
 
-    async def sectors(self, kind, period, order):
+    async def sectors(self, kind, period, order, timestamped=False):
         net, ratio, change, leader = BOARD_PERIOD[period]
         fields = ["f12", "f14", "f6", "f104", "f105", "f128", "f140", "f207", "f208", "f3", net, ratio, change,
                   "f62", "f164", "f174", "f66", "f72", "f78", "f84"]
         if leader:
             fields.append(leader)
+        if timestamped:
+            fields.append("f124")
         rows, total, source_url = await self.clist(BOARD_FS[kind], list(dict.fromkeys(fields)), net,
                                       1 if order == "inflow" else 0)
         out = []
@@ -269,16 +271,26 @@ class Live:
             up, down = number(row.get("f104")), number(row.get("f105"))
             code, exchange = str(row.get("f207", "")), str(row.get("f208", ""))
             leader_code = ({"1":"sh","0":"sz"}.get(exchange, "") + code) if re.fullmatch(r"[0-9]{6}", code) else None
-            out.append({"code": row["f12"], "name": row.get("f14"), "pct": number(row.get(change)), "pct_today": number(row.get("f3")),
+            item = {"code": row["f12"], "name": row.get("f14"), "pct": number(row.get(change)), "pct_today": number(row.get("f3")),
                         "main_net": value, "main_pct": number(row.get(ratio)), "amount": number(row.get("f6")),
                         "net_1": number(row.get("f62")), "net_5": number(row.get("f164")), "net_10": number(row.get("f174")),
                         "leader": (row.get(leader) or row.get("f140")) if leader else None, "leader_code": leader_code if period == "today" else None,
-                        "up": up, "down": down, "super_net": number(row.get("f66")), "large_net": number(row.get("f72"))})
+                        "up": up, "down": down, "super_net": number(row.get("f66")), "large_net": number(row.get("f72"))}
+            if timestamped:
+                item["market_time"] = self.quote_stamp(row.get("f124"))
+            out.append(item)
         if not out:
             raise Unavailable("东方财富 · 主力净额字段缺失")
         out.sort(key=lambda row: row["main_net"], reverse=order == "inflow")
-        return response({"items": out, "total": total}, "东方财富板块 §3.8", source_url,
-                        note=("上游延时入口。 " if "push2delay" in source_url else "") + "上游未给出交易时间。成交额和涨跌广度为当日口径")
+        stamps = [row["market_time"] for row in out if row.get("market_time")]
+        return response({"items": out, "total": total}, "东方财富板块 §3.8", source_url, max(stamps, default=None),
+                        ("上游延时入口。 " if "push2delay" in source_url else "") +
+                        ("部分或全部行缺少上游行情时间。 " if len(stamps) != len(out) else "") + "成交额和涨跌广度为当日口径")
+
+    async def live_board_members(self, board):
+        source, _, url = await self.clist(f"b:{board}+f:!50", self.security_fields, sort="f62", size=100)
+        rows = [self.security_row(raw) for raw in source]
+        return response(rows, "东方财富板块成分净额", url)
 
     async def members(self, board):
         return await self.security_list(f"b:{board}+f:!50", max_pages=20)
@@ -288,16 +300,20 @@ class Live:
 
     security_fields = ("f12", "f13", "f14", "f3", "f6", "f2", "f10", "f8", "f117", "f62", "f124")
 
+    @staticmethod
+    def quote_stamp(value):
+        stamp = number(value)
+        try:
+            return datetime.fromtimestamp(stamp, SH).isoformat() if stamp and stamp > 0 else None
+        except (ValueError, OSError, OverflowError):
+            return None
+
     def security_row(self, raw):
         code = str(raw.get("f12", ""))
         if not re.fullmatch(r"[0-9]{6}", code):
             raise Unavailable("东方财富 · 证券列表含无效代码")
         ticker = symbol(code) if str(raw.get("f13")) != "1" else "sh" + code
-        stamp = number(raw.get("f124"))
-        try:
-            stamp = datetime.fromtimestamp(stamp, SH).isoformat() if stamp and stamp > 0 else None
-        except (ValueError, OSError, OverflowError):
-            stamp = None
+        stamp = self.quote_stamp(raw.get("f124"))
         return {"code":ticker,"name":raw.get("f14"),"pct":number(raw.get("f3")),"amount":number(raw.get("f6")),
                 "price":number(raw.get("f2")),"vol_ratio":number(raw.get("f10")),"turnover":number(raw.get("f8")),
                 "float_cap":number(raw.get("f117")),"main_net":number(raw.get("f62")),"market_time":stamp}

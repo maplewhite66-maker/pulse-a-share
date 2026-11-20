@@ -8,7 +8,7 @@ import httpx
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from backend.local_access import BODY_LIMIT, WS_CLIENT_LIMIT
+from backend.local_access import BODY_LIMIT, WS_CLIENT_LIMIT, WS_MESSAGE_LIMIT
 from backend.main import Market, create_app
 from backend.services.cache import Cache
 from backend.services.paper import executable
@@ -46,7 +46,7 @@ class AccessTests(unittest.TestCase):
             self.assertIn("script-src 'self'",csp)
             self.assertIn("frame-ancestors 'none'",csp)
             self.assertIn("ws://127.0.0.1:8765",csp)
-            self.assertEqual(c.get("/docs").json()["info"]["version"],"3.1.0")
+            self.assertEqual(c.get("/docs").json()["info"]["version"],"4.0.0")
             url = "/api/stocks/screen?mode=demo"
             self.assertEqual(c.post(url,json={"scope":"watch","codes":["600519"]}).status_code,200)
             chunks = (chunk for chunk in (b" " * (BODY_LIMIT - 1), b" " * 2))
@@ -66,7 +66,7 @@ class AccessTests(unittest.TestCase):
                     if mode == "binary":
                         ws.send_bytes(b"{}")
                     elif mode == "oversize":
-                        ws.send_text("股" * 350)
+                        ws.send_text("股" * (WS_MESSAGE_LIMIT // len("股".encode("utf-8")) + 1))
                     else:
                         for _ in range(13):
                             ws.send_text("{}")

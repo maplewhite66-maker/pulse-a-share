@@ -156,9 +156,14 @@ class ApiTests(unittest.TestCase):
             self.assertIsNone(c.get("/api/tail?mode=demo").json()["data"]["auction"]["matched_volume"])
             self.assertEqual(c.get("/api/stocks/invalid/kline?mode=demo").status_code,422)
             self.assertEqual(c.get("/api/stocks/600519/kline?mode=demo&period=quarter").status_code,422)
-            a=c.get("/api/alerts?mode=demo&pct=0.1&client=test").json()["data"]
-            b=c.get("/api/alerts?mode=demo&pct=0.1&client=test").json()["data"]
-            self.assertTrue(a)
+            # Use a single, stable signal so a new quote cannot add an unrelated alert.
+            alert_url = (
+                "/api/alerts?mode=demo&codes=600519&client=test"
+                "&pct=0.1&turnover=100&rapid=25&volume=100"
+            )
+            a=c.get(alert_url).json()["data"]
+            b=c.get(alert_url).json()["data"]
+            self.assertEqual([(item["code"], item["event"]) for item in a], [("sh600519", "日内跌幅")])
             self.assertEqual([x["id"] for x in a],[x["id"] for x in b])
             with c.websocket_connect("ws://127.0.0.1/ws/market?mode=demo&codes=000001,sh000001") as ws:
                 p=ws.receive_json()

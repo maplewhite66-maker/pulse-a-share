@@ -26,15 +26,23 @@ from backend.services.analytics import clip, indicators, market_mood, quote_sign
 from backend.services.cache import Cache
 from backend.services.clock import ACTIVE, now, phase
 from backend.services.screener import ScreenRequest, market_breadth, screen
-from backend.services.quotes import QuoteBatcher, quote_interval
+from backend.services.quotes import QUOTE_LIST_LIMIT, QUOTE_SYMBOL_LIMIT, QuoteBatcher, quote_interval
 from backend.services.ideas import SessionJournal, WINDOWS, fresh, prior_tail, rank_candidate, shortlist, window_open
 from backend.services.hourly import HourlyScanner
 from backend.services.paper import PaperAccount
 from backend.services.global_market import GlobalMarket
 from backend.services.fund_flow import describe_flow
+from backend.services.ground_volume_engine import GroundVolumeEngine
+from backend.services.strategy_inputs import StrategyInputs
+from backend.services.sector_live_flow import SectorLiveFlow
+from backend.services.capital_profiler import CapitalProfiler
+from backend.services.hot_money_simulator import HotMoneySimulator
+from backend.services.pulse_v4_strategy import PulseV4Strategy
+from backend.services.daily_lhb import DailyLhb, render_svg
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
+PULSE_VERSION = "4.0.0"
 Mode = Literal["live", "demo"]
 Kind = Literal["industry", "concept", "region"]
 Span = Literal["today", "5d", "10d"]
@@ -447,8 +455,8 @@ class Market:
         return self.local(mode,[r for _,r in self.cache.history(alerts_key,100)],"Pulse 预警规则")
 
 
-def codes_from(value, limit=60):
-    if len(value) > 900:
+def codes_from(value, limit=60, max_length=900):
+    if len(value) > max_length:
         raise ValueError("股票代码列表过长")
     values = [x for x in value.split(",") if x.strip()]
     if len(values)>limit:
@@ -463,14 +471,14 @@ def checked(code):
         raise HTTPException(422,str(exc)) from exc
 
 
-def parse_codes(value, limit=60):
+def parse_codes(value, limit=60, max_length=900):
     try:
-        return codes_from(value, limit)
+        return codes_from(value, limit, max_length)
     except ValueError as exc:
         raise HTTPException(422,str(exc)) from exc
 
 
-def create_app(*, database=None, transport=None, access=None):
+def create_app(*, database=None, transport=None, access=None, ground_volume_root=None, strategy_root=None):
     cloud = (access or os.getenv("PULSE_ACCESS", "local")) == "cloud"
     paper_enabled = not cloud or os.getenv("PULSE_PAPER_CLOUD") == "1"
     @asynccontextmanager
@@ -487,8 +495,18 @@ def create_app(*, database=None, transport=None, access=None):
             app.state.premarket.import_archive(os.getenv("PULSE_BOOTSTRAP_REPORT"))
             app.state.monitor = IntradayMonitor(app.state.market, enabled=cloud,
                                                auction_feed=FuyaoAuction(client, cloud=cloud))
+            app.state.ground_volume = GroundVolumeEngine(
+                app.state.market, ground_volume_root if ground_volume_root is not None else os.getenv("PULSE_GROUND_VOLUME_DIR")
+            )
+            inputs = StrategyInputs(strategy_root if strategy_root is not None else os.getenv("PULSE_ADVANCED_DATA_DIR"))
+            app.state.sector_live = SectorLiveFlow(app.state.market, enabled=os.getenv("PULSE_SECTOR_FLOW") == "1", inputs=inputs)
+            app.state.capital_profiler = CapitalProfiler(app.state.market, inputs)
+            app.state.hot_money = HotMoneySimulator(inputs)
+            app.state.pulse_v4 = PulseV4Strategy(app.state.sector_live, app.state.hot_money, app.state.ground_volume)
+            app.state.daily_lhb = DailyLhb(app.state.market, enabled=os.getenv("PULSE_LHB_SCHEDULER", os.getenv("PULSE_SCHEDULER", "0")) == "1")
             background = [asyncio.create_task(worker.loop()) for worker in (
                 app.state.market.hourly, app.state.market.sessions, app.state.premarket, app.state.monitor,
+                app.state.ground_volume, app.state.sector_live, app.state.daily_lhb,
                 *((app.state.market.paper,) if paper_enabled else ()))]
             try:
                 yield
@@ -496,9 +514,10 @@ def create_app(*, database=None, transport=None, access=None):
                 for task in background:
                     task.cancel()
                 await asyncio.gather(*background, return_exceptions=True)
+                await app.state.sector_live.close()
                 await app.state.market.close()
 
-    api = FastAPI(title="Pulse A 股盯盘终端", version="3.1.0", lifespan=lifespan,
+    api = FastAPI(title="Pulse A 股盯盘终端", version=PULSE_VERSION, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None if cloud else "/openapi.json")
     api.add_middleware(CloudAccess if cloud else LocalAccess)
 
@@ -508,9 +527,15 @@ def create_app(*, database=None, transport=None, access=None):
     def svc(req):
         return req.app.state.market
 
+    async def advanced_clock(req):
+        clock = await svc(req).clock("live", wait=False)
+        current = now()
+        confirmed = clock["latest_day"] == current.date().isoformat() and not clock["calendar_error"]
+        return current, clock["phase"] if confirmed else "unknown"
+
     @api.get("/healthz", include_in_schema=False)
     async def liveness():
-        return {"status": "ok", "version": "3.1.0"}
+        return {"status": "ok", "version": PULSE_VERSION}
 
     @api.get("/api/config")
     async def config(req: Request):
@@ -552,6 +577,29 @@ def create_app(*, database=None, transport=None, access=None):
         report = req.app.state.premarket.get()
         return svc(req).local("live", report, "Pulse 盘前报告", None if report else "盘前报告尚未生成，请查看调度状态")
 
+    @api.get("/api/reports/daily-lhb")
+    async def daily_lhb(req: Request, day: date | None = None, mode: Mode = "live"):
+        reporter = req.app.state.daily_lhb
+        today = now().date().isoformat()
+        selected = day.isoformat() if day else None
+        report = reporter.get(selected) if mode == "live" else None
+        note = reporter.note if reporter.note_day == today and selected in (None, today) else None
+        data = {"report": report, "days": reporter.list_days() if mode == "live" else [],
+                "day": today, "enabled": reporter.enabled,
+                "running": mode == "live" and reporter.running and selected in (None, today),
+                "message": note if mode == "live" else "请在真实模式查看交易公开信息"}
+        return svc(req).local(mode, data, "Pulse 收盘龙虎榜")
+
+    @api.get("/api/reports/daily-lhb/{day}.svg")
+    async def daily_lhb_svg(req: Request, day: date):
+        report = req.app.state.daily_lhb.get(day.isoformat())
+        if not report:
+            raise HTTPException(404, "该交易日还没有可核对的龙虎榜海报")
+        return Response(render_svg(report), media_type="image/svg+xml",
+                        headers={"ETag": '"' + report["revision"] + '"',
+                                 "Content-Security-Policy": "default-src 'none'; sandbox",
+                                 "X-Content-Type-Options": "nosniff"})
+
     @api.get("/api/reports/{day}.md")
     async def dated_markdown(req: Request, day: date, revision: int | None = Query(None, ge=1, le=100)):
         return report_markdown(req.app.state.premarket.get(day.isoformat(), revision))
@@ -568,9 +616,9 @@ def create_app(*, database=None, transport=None, access=None):
         return await svc(req).quotes(mode,tuple(live.INDICES),refresh=refresh)
 
     @api.get("/api/stocks/quotes")
-    async def quotes(req:Request, mode:Mode="live", codes:str=Query(default=",".join(DEFAULT_CODES),max_length=900),
+    async def quotes(req:Request, mode:Mode="live", codes:str=Query(default=",".join(DEFAULT_CODES),max_length=QUOTE_LIST_LIMIT),
                      refresh:bool=False):
-        return await svc(req).quotes(mode,parse_codes(codes, 85),refresh=refresh)
+        return await svc(req).quotes(mode,parse_codes(codes, QUOTE_SYMBOL_LIMIT, QUOTE_LIST_LIMIT),refresh=refresh)
 
     @api.post("/api/stocks/screen")
     async def stock_screen(req: Request, query: ScreenRequest, mode: Mode = "live"):
@@ -587,6 +635,21 @@ def create_app(*, database=None, transport=None, access=None):
         return market.local(mode, {"rounds": rows, "running": market.hourly.running if mode == "live" else None},
                             "Pulse 小时筛选")
 
+    @api.get("/api/strategy/ground-volume-top20")
+    async def ground_volume_top20(
+        req: Request, slot: Literal["latest", "14:45", "15:15"] = "latest", mode: Mode = "live",
+    ):
+        if mode == "demo":
+            data = {"status": "live_only", "stale": False, "result": None, "expected_slot": None,
+                    "scheduled_slots": ["14:45", "15:15"], "error": None}
+        else:
+            data = req.app.state.ground_volume.results(now(), slot)
+        packet = svc(req).local(mode, data, "Pulse 地量严选")
+        packet["is_stale"] = data["stale"]
+        packet["cached"] = data["result"] is not None
+        packet["market_time"] = data["result"]["as_of"] if data["result"] else None
+        return packet
+
     @api.get("/api/market/global")
     async def global_quotes(req: Request, mode: Mode = "live"):
         market = svc(req)
@@ -594,6 +657,54 @@ def create_app(*, database=None, transport=None, access=None):
             return market.local(mode, None, "Yahoo Finance", "切换真实模式以读取外盘行情")
         data = await req.app.state.global_market.snapshot(now())
         return market.local(mode, data, "Yahoo Finance / 新浪财经")
+
+    @api.get("/api/sectors/live-flow")
+    async def sector_live_flow(
+        req: Request, kind: Literal["industry", "concept"] = "industry",
+        board: str | None = Query(None, pattern=r"^BK[0-9]{4}$"), mode: Mode = "live",
+    ):
+        if mode == "demo":
+            return svc(req).local(mode, {"status": "live_only", "items": [], "series": [], "covered": 0}, "Pulse")
+        current, phase = await advanced_clock(req)
+        collecting = phase in {"morning", "afternoon", "close_auction"}
+        engine = req.app.state.sector_live
+        if collecting or phase == "closed" and "15:00" <= current.strftime("%H:%M") <= "15:02":
+            engine.request(kind, current)
+        data = engine.payload(kind, current, collecting)
+        data["phase"] = phase
+        # Bound by known board membership in the displayed snapshot.
+        if board:
+            data["drilldown"] = await engine.members(board, current, collecting) if any(
+                row["code"] == board for row in data["items"]) else {"status": "waiting", "items": []}
+        packet = svc(req).local(mode, data, data.get("source", "Pulse 板块资金"))
+        packet["market_time"] = data.get("market_time")
+        packet["is_stale"] = data["status"] in {"stale", "archive", "unverified"}
+        packet["cached"] = bool(data["items"])
+        return packet
+
+    @api.get("/api/stocks/{code}/capital-profile")
+    async def capital_profile(req: Request, code: str, mode: Mode = "live"):
+        code = checked(code)
+        if mode == "demo":
+            return svc(req).local(mode, None, "Pulse 资金画像", "切换到真实模式读取资金证据")
+        data = await req.app.state.capital_profiler.report(code, now())
+        return svc(req).local(mode, data, "交易公开信息与市场形态")
+
+    @api.get("/api/strategy/hot-money-sim")
+    async def hot_money_sim(req: Request, mode: Mode = "live", codes: str = Query("", max_length=240)):
+        if mode == "demo":
+            return svc(req).local(mode, None, "Pulse 风格模拟", "切换到真实数据模式")
+        current, phase = await advanced_clock(req)
+        data = await req.app.state.hot_money.report(current, phase in {"morning", "afternoon"}, parse_codes(codes, 20))
+        return svc(req).local(mode, data, "Pulse 规则回放")
+
+    @api.get("/api/strategy/pulse-v4")
+    async def pulse_v4(req: Request, mode: Mode = "live"):
+        if mode == "demo":
+            return svc(req).local(mode, {"status": "live_only", "items": []}, "Pulse")
+        current, phase = await advanced_clock(req)
+        data = await req.app.state.pulse_v4.report(current, phase in {"morning", "afternoon"})
+        return svc(req).local(mode, data, "Pulse 四维融合")
 
     @api.get("/api/stocks/session-journal")
     async def session_journal(req: Request, mode: Mode = "live"):
@@ -676,7 +787,7 @@ def create_app(*, database=None, transport=None, access=None):
     async def stream(ws:WebSocket):
         mode=ws.query_params.get("mode","live")
         try:
-            codes = codes_from(ws.query_params.get("codes", ",".join(DEFAULT_CODES)), 85)
+            codes = codes_from(ws.query_params.get("codes", ",".join(DEFAULT_CODES)), QUOTE_SYMBOL_LIMIT, QUOTE_LIST_LIMIT)
             if mode not in ("demo", "live"):
                 raise ValueError
         except ValueError:
@@ -719,7 +830,7 @@ def create_app(*, database=None, transport=None, access=None):
                         if not isinstance(message, dict):
                             continue
                         if message.get("type") == "subscribe" and isinstance(message.get("codes"), str):
-                            updated = codes_from(message["codes"], 85)
+                            updated = codes_from(message["codes"], QUOTE_SYMBOL_LIMIT, QUOTE_LIST_LIMIT)
                             if updated != codes:
                                 codes = updated
                                 break
